@@ -147,7 +147,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="逐頁抽取 + 切 chunk，輸出 indices/chunks.jsonl（每行 JSON：source/page/text）"
     )
-    parser.add_argument("--input", default="data", help="資料來源根目錄（預設 data）")
+    parser.add_argument("--input", default="datasets", help="資料來源根目錄（預設 data）")
     parser.add_argument("--out", default="indices/chunks.jsonl", help="輸出 JSONL（預設 indices/chunks.jsonl）")
     parser.add_argument("--write-txt", action="store_true", help="同時輸出 indices/chunks.txt（相容舊流程）")
     parser.add_argument("--chunk-size", type=int, default=1200, help="每個 chunk 大小（字元）")

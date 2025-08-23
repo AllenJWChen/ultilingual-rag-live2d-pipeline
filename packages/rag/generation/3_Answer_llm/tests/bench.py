@@ -229,7 +229,7 @@ def main():
     parser.add_argument("--max-questions", type=int, default=200,
                        help="Maximum questions per test")
     parser.add_argument("--questions", 
-                       default=str(PROJECT_ROOT / "data" / "questions.jsonl"),
+                       default=str(PROJECT_ROOT / "outputs" / "data" / "questions.jsonl"),
                        help="Questions file path")
     parser.add_argument("--index",
                        default=str(PROJECT_ROOT / "indices"),

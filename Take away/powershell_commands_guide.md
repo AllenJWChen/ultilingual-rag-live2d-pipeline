@@ -4,6 +4,13 @@
 
 ### 基本目錄查詢
 ```powershell
+# 🌲 樹狀結構顯示目錄（推薦！）
+tree
+tree /f          # 包含檔案
+tree /a          # 使用 ASCII 字符
+tree data        # 查看特定目錄
+tree data /f     # 查看 data 目錄包含檔案
+
 # 查看當前目錄內容
 Get-ChildItem
 dir
@@ -369,6 +376,7 @@ Write-Host "Answers: $(if (Test-Path outputs/answers.jsonl) {(Get-Content output
 
 ## 📞 快速參考
 
+**目錄結構**: `tree /f` (包含檔案) 或 `tree` (僅目錄)  
 **模型檢查**: `ollama list`  
 **API 測試**: `curl http://localhost:11434/v1/models`  
 **檔案統計**: `Get-Content file.jsonl | Measure-Object -Line`  
