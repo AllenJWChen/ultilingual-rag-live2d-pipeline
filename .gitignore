@@ -1,0 +1,26 @@
+﻿# 大型資料檔案
+indices/chunks.*
+indices/index.faiss
+indices/metadata.json
+
+# 測試結果
+**/tests/results/*.jsonl
+**/tests/results/*.csv
+**/tests/results/*.log
+
+# Python 緩存
+**/__pycache__/
+*.pyc
+
+# 更多大型檔案
+datasets/*.pdf
+datasets/*.docx
+outputs/data/*.jsonl
+
+# 所有測試相關
+**/tests/__pycache__/
+**/tests/results/bench_*.log
+**/tests/results/benchmark_*.csv
+
+# 中文檔名問題 (編碼問題)
+**/歷史產物區/*
