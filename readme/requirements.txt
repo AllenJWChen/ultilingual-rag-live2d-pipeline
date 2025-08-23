@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+pymupdf
+pytesseract
+Pillow
+pandas
+numpy
+scikit-learn
+faiss-cpu==1.7.4; platform_system!='Windows'
+# sentence-transformers 建議安裝；若無網路可先用輕量本地模型
+sentence-transformers
+# reranker（可選）：
+# FlagEmbedding
+pyttsx3

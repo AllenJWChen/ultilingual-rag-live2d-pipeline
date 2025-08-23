@@ -1,0 +1,3 @@
+# TODO: 封裝 Azure/ElevenLabs/OpenAI TTS，依 .env 切換供應商
+# def synthesize(text: str, lang='zh-TW') -> Path:
+#     ...

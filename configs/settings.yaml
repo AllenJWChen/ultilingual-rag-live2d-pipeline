@@ -1,0 +1,8 @@
+embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+index_dir: "indices"
+chunk:
+  size: 1000
+  overlap: 100
+retrieval:
+  top_k: 8
+  use_reranker: false

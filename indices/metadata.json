@@ -1,0 +1,9 @@
+{
+  "chunks": [
+    {
+      "text": "請先執行 ingest 建索引。",
+      "page": 1,
+      "source": "placeholder.txt"
+    }
+  ]
+}
