@@ -1,26 +1,50 @@
-﻿# 大型資料檔案
-indices/chunks.*
-indices/index.faiss
-indices/metadata.json
+﻿############################
+# Python / 通用雜訊
+############################
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
 
-# 測試結果
-**/tests/results/*.jsonl
-**/tests/results/*.csv
-**/tests/results/*.log
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
 
-# Python 緩存
-**/__pycache__/
-*.pyc
+# 虛擬環境
+.venv/
 
-# 更多大型檔案
-datasets/*.pdf
-datasets/*.docx
-outputs/data/*.jsonl
+############################
+# 專案產物
+############################
+# 忽略索引檔（可重建）
+indices/**
+!indices/**/.gitkeep
 
-# 所有測試相關
-**/tests/__pycache__/
-**/tests/results/bench_*.log
-**/tests/results/benchmark_*.csv
+# outputs：只保留 data，忽略 tests
+outputs/tests/**
+!outputs/data/**
 
-# 中文檔名問題 (編碼問題)
-**/歷史產物區/*
+############################
+# 資料集（只保留 sample 與 README）
+############################
+datasets/**
+!datasets/sample/**
+!datasets/.gitkeep
+!datasets/README.md
+
+############################
+# 個人筆記
+############################
+Take\ away/*.docx
+Take\ away/*.pdf
+Take\ away/assets/**
+!Take\ away/**/.gitkeep
+!Take\ away/*.md
+
+############################
+# 引用文獻 / 廢棄檔案
+############################
+reference/**
+Zoom\ out\ (historical\ files)/**
+**/歷史產物區/**
