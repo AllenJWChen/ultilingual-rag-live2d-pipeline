@@ -11,6 +11,7 @@ def build_keywords_prompt(text: str, n: int = 3, lang: str = "en") -> str:
     2. 避免過於泛用的關鍵字  
     3. 中英文一致性處理
     4. 技術文件特化優化
+    5. 強制相關性檢查
     """
     
     # 檢測內容語言傾向
@@ -26,45 +27,58 @@ def build_keywords_prompt(text: str, n: int = 3, lang: str = "en") -> str:
     
     if lang.lower() == "zh":
         return dedent(f"""
-        你是專業的技術文件分析師。從下列文字中抽取 {n} 個最具代表性的**專業術語**或**核心概念**。
+        你是專業的技術文件分析師。從下列文字中抽取 {n} 個**直接出現**且**最具代表性**的專業術語。
 
-        要求：
-        1. 使用繁體中文術語（2-4個字）
-        2. 優先選擇：公司名稱、產品型號、技術規格、行業術語
-        3. 避免過於泛用的詞彙（如：技術、發展、市場）
-        4. 避免年份、數字等時間性詞彙
-        5. 只輸出JSON格式：["術語1", "術語2", "術語3"]
+        ⚠️ 嚴格要求：
+        1. 關鍵字必須在原文中**直接出現**或**明確相關**
+        2. 使用繁體中文術語（2-4個字）
+        3. 優先順序：具體專有名詞 > 技術術語 > 主題概念
+        4. 絕對禁止：與內容無關的詞彙（如：內容講達爾文不要生成"晶圓代工"）
+        5. 絕對禁止：過於泛用詞彙（技術、發展、市場、系統、產品）
+        6. 絕對禁止：年份、數字等時間性詞彙
+        7. 只輸出JSON格式：["術語1", "術語2", "術語3"]
 
-        範例：
-        - 好的關鍵字：["台積電", "7奈米製程", "晶圓代工"]
-        - 不好的關鍵字：["技術", "發展", "2024"]
+        ✅ 良好示例：
+        - 內容提到"台積電"→關鍵字包含["台積電"]
+        - 內容提到"物種起源"→關鍵字包含["物種起源", "達爾文"]
+        - 內容提到"半導體產業"→關鍵字包含["半導體產業"]
 
+        ❌ 錯誤示例：
+        - 內容講達爾文→錯誤生成["晶圓代工"]（完全不相關）
+        - 內容講生物→錯誤生成["AI", "技術"]（不相關）
+        
         文字內容：
         {text}
 
-        關鍵字JSON：
+        請仔細閱讀上述內容，提取**確實在內容中出現**的關鍵概念：
         """).strip()
 
-    # 英文版本 - 針對技術文件優化
+    # 英文版本 - 強化相關性檢查
     return dedent(f"""
-        You are a technical document analyst. Extract {n} highly specific **domain terms** or **key concepts** from the text below.
+        You are a professional technical document analyst. Extract {n} **directly relevant** and **highly specific** domain terms that **actually appear** in the text below.
 
-        Requirements:
-        1. Use precise English terms (1-4 words max)
-        2. Prioritize: company names, product models, technical specifications, industry terms
-        3. Avoid generic words (technology, development, market, system)
-        4. Avoid years, dates, or temporal references  
-        5. Focus on actionable, searchable terms
-        6. Output ONLY JSON format: ["term1", "term2", "term3"]
+        ⚠️ STRICT REQUIREMENTS:
+        1. Keywords MUST be **directly present** or **clearly related** to the actual content
+        2. Use precise English terms (1-4 words max)
+        3. Priority: Specific proper nouns > Technical terms > Topic concepts  
+        4. ABSOLUTELY FORBIDDEN: Irrelevant terms (e.g., if content is about Darwin, DON'T generate "semiconductor")
+        5. ABSOLUTELY FORBIDDEN: Generic words (technology, development, market, system, product)
+        6. ABSOLUTELY FORBIDDEN: Years, dates, or temporal references
+        7. Output ONLY JSON format: ["term1", "term2", "term3"]
 
-        Examples:
-        - Good keywords: ["OLED displays", "Micro LED", "CES 2025"]
-        - Poor keywords: ["technology", "development", "market"]
+        ✅ GOOD Examples:
+        - Content mentions "TSMC" → keywords include ["TSMC"]  
+        - Content mentions "species evolution" → keywords include ["evolution", "Darwin"]
+        - Content mentions "semiconductor industry" → keywords include ["semiconductor"]
+
+        ❌ BAD Examples:
+        - Content about Darwin → WRONG to generate ["semiconductor"] (completely unrelated)
+        - Content about biology → WRONG to generate ["AI", "technology"] (not relevant)
 
         Text content:
         {text}
 
-        Keywords JSON:
+        Carefully read the content above and extract keywords that **actually appear** in the text:
         """).strip()
 
 
