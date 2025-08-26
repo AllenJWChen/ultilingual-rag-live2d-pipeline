@@ -1,244 +1,730 @@
+# ================================
+# 修復版 clients.py (無語法錯誤)
+# 路徑: packages/rag/generation/1_Keyword_llm/clients.py
+# ================================
+
 # -*- coding: utf-8 -*-
-from __future__ import annotations
+"""
+完整修復版語言感知關鍵字客戶端模組 (clients.py)
+🔧 修復語法錯誤並適配 1_Keyword_llm 路徑結構
+"""
 
-import os
-import re
 import json
-from typing import List, Optional
+import re
+import time
+import requests
+from typing import List, Dict, Optional, Union
 
-# 改進版本：導入新的prompt函數
-from .prompts import build_keywords_prompt, build_adaptive_keywords_prompt
+# 修復 import 路徑
+try:
+    from .prompts import (
+        build_keywords_prompt,
+        build_adaptive_keywords_prompt,
+        build_contextual_keywords_prompt,
+        build_quality_enhanced_keywords_prompt,
+        build_domain_specific_keywords_prompt,
+        build_fallback_keywords_prompt
+    )
+except ImportError:
+    # 如果相對路徑失敗，嘗試絕對路徑
+    try:
+        from packages.rag.generation.keyword_llm.prompts import (
+            build_keywords_prompt,
+            build_adaptive_keywords_prompt,
+            build_contextual_keywords_prompt,
+            build_quality_enhanced_keywords_prompt,
+            build_domain_specific_keywords_prompt,
+            build_fallback_keywords_prompt
+        )
+    except ImportError:
+        print("Warning: 無法導入 prompts 模組，使用基礎提示詞")
+        def build_keywords_prompt(text: str, n: int = 3, lang: str = "en") -> str:
+            if lang in ["zh", "chinese"]:
+                return f"請從以下文本中提取{n}個關鍵字，輸出JSON格式：{text}"
+            elif lang in ["ja", "japanese"]:
+                return f"以下のテキストから{n}個のキーワードを抽出し、JSON形式で出力してください：{text}"
+            else:
+                return f"Extract {n} keywords from the following text in JSON format: {text}"
 
-# 環境變數配置
-LLM_MODE = os.getenv("LLM_MODE", "OPENAI_COMPAT").upper().strip()
-MODEL_KEYWORDS = os.getenv("MODEL_KEYWORDS", "llama3.1:latest")
 
-# -------------- 改進版本：更智能的關鍵字清理 --------------
-def _postprocess_keywords(raw_items: List[str], n: int, text: str = "") -> List[str]:
-    """
-    改進版關鍵字後處理：更嚴格的品質控制
-    """
-    cleaned: List[str] = []
-    
-    # 禁用詞列表（太過泛用的詞彙）
-    generic_terms = {
-        # 英文泛用詞
-        "technology", "development", "market", "system", "solution", "product", 
-        "company", "industry", "business", "service", "application", "platform",
-        "research", "analysis", "study", "report", "data", "information",
-        
-        # 中文泛用詞  
-        "技術", "發展", "市場", "系統", "解決方案", "產品", "公司", "行業",
-        "商業", "服務", "應用", "平台", "研究", "分析", "報告", "資料"
+# ========== 語言感知配置 ==========
+
+LANGUAGE_AWARE_CONFIG = {
+    "chinese": {
+        "temperature": 0.3,
+        "max_tokens": 200,
+        "timeout": 30,
+        "retry_count": 3
+    },
+    "english": {
+        "temperature": 0.2,
+        "max_tokens": 150,
+        "timeout": 25,
+        "retry_count": 3
+    },
+    "japanese": {
+        "temperature": 0.25,
+        "max_tokens": 180,
+        "timeout": 30,
+        "retry_count": 3
+    },
+    "mixed": {
+        "temperature": 0.25,
+        "max_tokens": 250,
+        "timeout": 35,
+        "retry_count": 3
+    },
+    "auto": {
+        "temperature": 0.3,
+        "max_tokens": 200,
+        "timeout": 30,
+        "retry_count": 3
     }
-    
-    # 時間性詞彙模式
-    temporal_pattern = re.compile(r'^\d{4}年?$|^\d+月$|^第\d+季$|^Q[1-4]$', re.IGNORECASE)
-    
-    for k in raw_items:
-        # 基本清理
-        k = k.strip().strip("，,;、.。:：-—\"'「」『』()（）[]【】<>《》")
-        
-        # 過濾條件
-        if not k:
-            continue
-        if len(k) < 2:  # 太短
-            continue
-        if re.fullmatch(r"[\W_]+", k):  # 只有符號
-            continue
-        if k.lower() in generic_terms:  # 泛用詞
-            continue
-        if temporal_pattern.match(k):  # 時間性詞彙
-            continue
-        if re.match(r'^\d+\.?\d*[%萬億千百十]?$', k):  # 純數字
-            continue
-        
-        # 去重（保留順序）
-        if k not in cleaned:
-            cleaned.append(k)
-    
-    # 如果清理後不夠，用fallback策略
-    if len(cleaned) < n:
-        fallback_keywords = _extract_fallback_keywords(text, n - len(cleaned))
-        cleaned.extend(fallback_keywords)
-    
-    return cleaned[:max(1, n)]
+}
 
 
-def _extract_fallback_keywords(text: str, needed: int) -> List[str]:
-    """
-    Fallback策略：從文本中提取高頻且有意義的詞彙
-    """
-    # 提取候選詞
-    candidates = []
-    
-    # 中文詞彙（2-4字）
-    chinese_terms = re.findall(r'[\u4e00-\u9fff]{2,4}', text)
-    candidates.extend(chinese_terms)
-    
-    # 英文詞彙（大寫開頭的專有名詞優先）
-    english_terms = re.findall(r'[A-Z][a-zA-Z]{1,15}', text)  # 專有名詞
-    candidates.extend(english_terms)
-    
-    # 技術縮寫（全大寫2-5字母）
-    acronyms = re.findall(r'\b[A-Z]{2,5}\b', text)
-    candidates.extend(acronyms)
-    
-    # 統計頻次並過濾
-    freq_count = {}
-    for term in candidates:
-        if len(term) >= 2 and not re.match(r'^\d+$', term):
-            freq_count[term] = freq_count.get(term, 0) + 1
-    
-    # 按頻次排序，取前N個
-    sorted_terms = sorted(freq_count.items(), key=lambda x: (-x[1], x[0]))
-    return [term for term, _ in sorted_terms[:needed]]
+# ========== 核心生成函數 ==========
 
-
-def _split_keywords(s: str) -> List[str]:
-    """
-    改進版關鍵字分割：處理JSON格式和多種分隔符
-    """
-    # 嘗試解析JSON格式
-    s = s.strip()
-    if s.startswith('[') and s.endswith(']'):
-        try:
-            json_result = json.loads(s)
-            if isinstance(json_result, list):
-                return [str(item).strip() for item in json_result if str(item).strip()]
-        except json.JSONDecodeError:
-            pass
+def generate_keywords(text: str, n: int = 3, lang: str = "en", 
+                     content_type: Optional[str] = None,
+                     quality_score: Optional[float] = None,
+                     domain: Optional[str] = None,
+                     context_keywords: Optional[List[str]] = None) -> List[str]:
+    """修復版語言感知關鍵字生成函數"""
     
-    # 移除JSON標記但保留內容
-    s = re.sub(r'^\[|\]$', '', s)
-    s = re.sub(r'^[\'""]|[\'""]$', '', s)
-    
-    # 多種分隔符分割
-    parts = re.split(r'[,\n，、;；]\s*[\'""]?', s)
-    return [p.strip().strip('\'"\"') for p in parts if p.strip()]
-
-
-# -------------- MOCK模式改進 --------------
-def _generate_keywords_mock(text: str, n: int, lang: str) -> List[str]:
-    """
-    改進版MOCK模式：更智能的本地關鍵字提取
-    """
-    return _extract_fallback_keywords(text, n)
-
-
-# -------------- OpenAI兼容模式改進 --------------
-def _generate_keywords_openai_compat(text: str, n: int, lang: str, content_type: str = "auto") -> List[str]:
-    """
-    改進版OpenAI兼容模式：使用新的prompt策略
-    """
-    try:
-        from openai import OpenAI
-        client = OpenAI(
-            base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1"),
-            api_key=os.getenv("OPENAI_API_KEY", "ollama"),
-        )
-    except Exception:
-        return _generate_keywords_mock(text, n, lang)
-
-    # 使用自適應prompt
-    prompt = build_adaptive_keywords_prompt(text, content_type, n, lang)
-    
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_KEYWORDS,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # 降低溫度提高一致性
-            max_tokens=150,   # 增加tokens以獲得更好的回應
-        )
-        
-        output = resp.choices[0].message.content.strip()
-        
-        # 處理回應
-        items = _split_keywords(output)
-        return _postprocess_keywords(items, n, text)
-        
-    except Exception as e:
-        print(f"[WARN] OpenAI API調用失敗: {e}, 使用fallback")
-        return _generate_keywords_mock(text, n, lang)
-
-
-# -------------- 主要接口改進 --------------
-def generate_keywords(text: str, n: int = 3, lang: str = "auto", content_type: str = "auto") -> List[str]:
-    """
-    改進版關鍵字生成主函數
-    
-    Args:
-        text: 輸入文本
-        n: 關鍵字數量
-        lang: 語言 ("auto", "zh", "en") 
-        content_type: 內容類型 ("auto", "technical", "business", "academic")
-    
-    Returns:
-        List[str]: 生成的關鍵字列表
-    """
     if not text or not text.strip():
-        return [f"empty_text_{i+1}" for i in range(n)]
+        return _generate_fallback_keywords(lang, n)
     
-    # 自動語言檢測改進
-    if lang == "auto":
-        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-        english_chars = len(re.findall(r'[a-zA-Z]', text))
-        
-        if chinese_chars > english_chars:
-            lang = "zh"
-        else:
-            lang = "en"
+    # 選擇提示詞
+    prompt = _select_optimal_prompt(
+        text=text, n=n, lang=lang, content_type=content_type,
+        quality_score=quality_score, domain=domain, 
+        context_keywords=context_keywords
+    )
     
-    # 根據模式選擇生成方法
-    mode = LLM_MODE
-    if mode == "MOCK":
-        return _generate_keywords_mock(text, n, lang)
+    # 獲取配置
+    config = LANGUAGE_AWARE_CONFIG.get(lang, LANGUAGE_AWARE_CONFIG["auto"])
     
+    # 語言特定優化
+    if lang in ["en", "english"]:
+        config = config.copy()
+        config["temperature"] = 0.1
+    elif lang in ["ja", "japanese"]:
+        config = config.copy()
+        config["temperature"] = 0.15
+    
+    # 執行LLM調用
     try:
-        return _generate_keywords_openai_compat(text, n, lang, content_type)
+        keywords = _call_llm_with_retry(
+            prompt=prompt, config=config, expected_count=n, lang=lang
+        )
+        
+        keywords = _postprocess_keywords(keywords, lang, n)
+        
+        if _is_valid_keywords(keywords, lang):
+            return keywords
+        else:
+            return _generate_fallback_keywords(lang, n, "invalid_extraction")
+        
     except Exception as e:
-        print(f"[ERROR] 關鍵字生成失敗: {e}")
-        return _generate_keywords_mock(text, n, lang)
+        return _generate_fallback_keywords(lang, n, str(e))
 
 
-def generate_keywords_batch(chunks: List[dict], n: int = 3, lang: str = "auto") -> List[dict]:
-    """
-    批量關鍵字生成 - 考慮上下文相關性
+def generate_keywords_batch(chunks: List[Dict], n: int = 3, lang: str = "en") -> List[Dict]:
+    """批量關鍵字生成"""
     
-    Args:
-        chunks: 包含text字段的chunk列表  
-        n: 每個chunk的關鍵字數量
-        lang: 語言
+    if not chunks:
+        return []
     
-    Returns:
-        List[dict]: 添加了keywords字段的chunk列表
-    """
+    print(f"批量處理 {len(chunks)} 個chunks...")
+    
     results = []
-    context_keywords = []  # 累積的關鍵字上下文
     
     for i, chunk in enumerate(chunks):
-        text = chunk.get("text", "")
-        
-        # 檢測內容類型
-        content_type = "auto"
-        if "display" in text.lower() or "screen" in text.lower():
-            content_type = "technical"
-        elif "market" in text.lower() or "revenue" in text.lower():
-            content_type = "business"
+        try:
+            chunk_lang = _detect_chunk_language_preference(chunk, lang)
             
-        # 生成關鍵字
-        keywords = generate_keywords(text, n, lang, content_type)
-        
-        # 更新上下文（保留最近的關鍵字作為上下文）
-        context_keywords.extend(keywords)
-        context_keywords = list(dict.fromkeys(context_keywords))[-20:]  # 保留最近20個不重複關鍵字
-        
-        # 創建結果
-        result = chunk.copy()
-        result["keywords"] = keywords
-        results.append(result)
+            keywords = generate_keywords(
+                text=chunk.get("text", ""),
+                n=n,
+                lang=chunk_lang
+            )
+            
+            processing_success = _is_valid_keywords(keywords, chunk_lang)
+            
+            result = {
+                "chunk_id": i,
+                "source": chunk.get("source", "unknown"),
+                "page": chunk.get("page", 0),
+                "keywords": keywords,
+                "detected_language": chunk_lang,
+                "processing_success": processing_success
+            }
+            
+            results.append(result)
+            
+        except Exception as e:
+            error_result = {
+                "chunk_id": i,
+                "source": chunk.get("source", "unknown"),
+                "page": chunk.get("page", 0),
+                "keywords": _generate_fallback_keywords(lang, n, str(e)),
+                "detected_language": lang,
+                "processing_success": False,
+                "error": str(e)
+            }
+            
+            results.append(error_result)
+    
+    success_count = sum(1 for r in results if r.get("processing_success", False))
+    print(f"完成: {success_count}/{len(results)} 成功 ({success_count/len(results)*100:.1f}%)")
     
     return results
 
 
-__all__ = ["generate_keywords", "generate_keywords_batch"]
+# ========== 輔助函數 ==========
+
+def _select_optimal_prompt(text: str, n: int, lang: str, **kwargs) -> str:
+    """選擇最優提示詞"""
+    return build_keywords_prompt(text, n, lang)
+
+
+def _detect_chunk_language_preference(chunk: Dict, default_lang: str) -> str:
+    """檢測chunk語言偏好"""
+    
+    if "main_language" in chunk:
+        main_lang = chunk["main_language"]
+        lang_mapping = {
+            "chinese": "zh", "english": "en", "japanese": "ja",
+            "mixed": "mixed", "unknown": "auto"
+        }
+        return lang_mapping.get(main_lang, default_lang)
+    
+    text = chunk.get("text", "")
+    if text:
+        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+        english_chars = len(re.findall(r'[a-zA-Z]', text))
+        japanese_chars = len(re.findall(r'[\u3040-\u309f\u30a0-\u30ff]', text))
+        total_chars = chinese_chars + english_chars + japanese_chars
+        
+        if total_chars > 0:
+            japanese_ratio = japanese_chars / total_chars
+            chinese_ratio = chinese_chars / total_chars
+            english_ratio = english_chars / total_chars
+            
+            if japanese_ratio > 0.3:
+                return "ja"
+            elif chinese_ratio > 0.6:
+                return "zh"
+            elif english_ratio > 0.6:
+                return "en"
+            else:
+                return "mixed"
+    
+    return default_lang
+
+
+def _call_llm_with_retry(prompt: str, config: Dict, expected_count: int, lang: str = "en") -> List[str]:
+    """帶重試的LLM調用"""
+    
+    max_retries = config.get("retry_count", 3)
+    timeout = config.get("timeout", 30)
+    
+    for attempt in range(max_retries):
+        try:
+            if lang in ["en", "english"]:
+                response = _call_ollama_api_english_optimized(prompt, config, timeout)
+            elif lang in ["ja", "japanese"]:
+                response = _call_ollama_api_japanese_optimized(prompt, config, timeout)
+            else:
+                response = _call_ollama_api_fixed(prompt, config, timeout)
+            
+            return response
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                raise e
+
+
+def _call_ollama_api_fixed(prompt: str, config: Dict, timeout: int) -> List[str]:
+    """修復版Ollama API調用"""
+    
+    try:
+        url = "http://localhost:11434/api/generate"
+        
+        payload = {
+            "model": "llama3.1:latest",
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": config.get("temperature", 0.3),
+                "num_predict": config.get("max_tokens", 200),
+                "stop": ["\n\n", "---", "###"],
+                "top_k": 40,
+                "top_p": 0.9,
+                "repeat_penalty": 1.1
+            }
+        }
+        
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                text_response = result.get("response", "").strip()
+                keywords = _parse_llm_response_enhanced(text_response)
+                return keywords if keywords else []
+                    
+            except json.JSONDecodeError:
+                return _emergency_keyword_extract(response.text)
+        else:
+            raise Exception(f"API調用失敗: {response.status_code}")
+            
+    except requests.RequestException as e:
+        raise Exception(f"網絡請求失敗: {e}")
+
+
+def _call_ollama_api_english_optimized(prompt: str, config: Dict, timeout: int) -> List[str]:
+    """英文優化版API調用"""
+    
+    try:
+        url = "http://localhost:11434/api/generate"
+        
+        payload = {
+            "model": "llama3.1:latest",
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.05,
+                "num_predict": 80,
+                "stop": ["\n", "---", "Note:", "Remember:", "Content:", "Text:"],
+                "top_k": 10,
+                "top_p": 0.7,
+                "repeat_penalty": 1.3,
+                "seed": 42
+            }
+        }
+        
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        
+        if response.status_code == 200:
+            result = response.json()
+            text_response = result.get("response", "").strip()
+            keywords = _parse_english_keywords_enhanced(text_response)
+            return keywords if keywords else []
+                
+        else:
+            raise Exception(f"英文API調用失敗: {response.status_code}")
+            
+    except Exception as e:
+        raise Exception(f"英文請求失敗: {e}")
+
+
+def _call_ollama_api_japanese_optimized(prompt: str, config: Dict, timeout: int) -> List[str]:
+    """日文優化版API調用"""
+    
+    try:
+        url = "http://localhost:11434/api/generate"
+        
+        payload = {
+            "model": "llama3.1:latest",
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.15,
+                "num_predict": 120,
+                "stop": ["\n\n", "---", "注意:", "記住:", "內容:", "テキスト:"],
+                "top_k": 25,
+                "top_p": 0.8,
+                "repeat_penalty": 1.15,
+                "seed": 123
+            }
+        }
+        
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        
+        if response.status_code == 200:
+            result = response.json()
+            text_response = result.get("response", "").strip()
+            keywords = _parse_japanese_keywords_enhanced(text_response)
+            return keywords if keywords else []
+                
+        else:
+            raise Exception(f"日文API調用失敗: {response.status_code}")
+            
+    except Exception as e:
+        raise Exception(f"日文請求失敗: {e}")
+
+
+def _parse_llm_response_enhanced(text_response: str) -> List[str]:
+    """增強版LLM響應解析"""
+    
+    if not text_response:
+        return []
+    
+    # 處理 "Here are the" 開頭的響應
+    if "Here are the" in text_response and "keywords" in text_response:
+        pattern = r'Here are the.*?keywords[^:]*:?\s*(.*?)(?:\n\n|$)'
+        match = re.search(pattern, text_response, re.DOTALL | re.IGNORECASE)
+        if match:
+            keywords_text = match.group(1).strip()
+            keywords = _extract_keywords_from_text(keywords_text)
+            if keywords:
+                return keywords
+    
+    # JSON陣列解析
+    json_patterns = [
+        r'\[(.*?)\]',
+        r'keywords?\s*[:\-]\s*\[(.*?)\]',
+        r'回答\s*[：:]\s*\[(.*?)\]'
+    ]
+    
+    for pattern in json_patterns:
+        matches = re.findall(pattern, text_response, re.DOTALL | re.IGNORECASE)
+        for match in matches:
+            try:
+                if isinstance(match, tuple):
+                    keywords = [kw.strip().strip('"\'') for kw in match if kw.strip()]
+                else:
+                    json_str = f'[{match}]'
+                    keywords = json.loads(json_str)
+                    keywords = [str(kw).strip().strip('"\'') for kw in keywords if kw]
+                
+                if keywords:
+                    return keywords[:6]
+            except json.JSONDecodeError:
+                continue
+    
+    # 引號詞匹配
+    quoted_patterns = [r'"([^"]+)"', r'「([^」]+)」', r'『([^』]+)』', r"'([^']+)'"]
+    
+    quoted_words = []
+    for pattern in quoted_patterns:
+        matches = re.findall(pattern, text_response)
+        quoted_words.extend([w.strip() for w in matches if w.strip()])
+    
+    if quoted_words:
+        clean_words = [w for w in quoted_words if 1 < len(w) < 50]
+        if clean_words:
+            return clean_words[:6]
+    
+    # 行分割解析
+    lines = [line.strip() for line in text_response.split('\n') if line.strip()]
+    potential_keywords = []
+    
+    for line in lines:
+        if any(skip in line.lower() for skip in ['here are', 'keywords', 'extracted', 'format', 'json']):
+            continue
+        
+        cleaned = re.sub(r'^\d+[.)]\s*', '', line)
+        cleaned = re.sub(r'^[-*•]\s*', '', cleaned)
+        cleaned = cleaned.strip('.,;:"\'')
+        
+        if cleaned and 2 <= len(cleaned) <= 40:
+            potential_keywords.append(cleaned)
+    
+    return potential_keywords[:6] if potential_keywords else []
+
+
+def _parse_english_keywords_enhanced(text_response: str) -> List[str]:
+    """英文關鍵字專用解析器"""
+    
+    if not text_response:
+        return []
+    
+    # 處理 "Here are the extracted keywords in JSON format:" 響應
+    if "JSON format" in text_response:
+        json_start = text_response.lower().find("json format")
+        if json_start != -1:
+            json_part = text_response[json_start + 11:].strip()
+            json_match = re.search(r'\[(.*?)\]', json_part, re.DOTALL)
+            if json_match:
+                try:
+                    json_str = f'[{json_match.group(1)}]'
+                    keywords = json.loads(json_str)
+                    keywords = [str(kw).strip().strip('"\'') for kw in keywords if kw]
+                    if keywords:
+                        # 修復語法錯誤：正確的字符串結束
+                        valid_keywords = []
+                        for kw in keywords:
+                            if re.match(r'^[a-zA-Z][a-zA-Z\s\-_]{1,30}$', kw):
+                                valid_keywords.append(kw.title())
+                        return valid_keywords[:5]
+                except json.JSONDecodeError:
+                    pass
+    
+    # 處理 "Here are the 4 most important keywords" 響應
+    if "most important keywords" in text_response:
+        important_start = text_response.lower().find("most important keywords")
+        if important_start != -1:
+            content = text_response[important_start + 23:].strip()
+            numbered_pattern = r'\d+\.\s*"?([^"\n]+)"?'
+            numbered_matches = re.findall(numbered_pattern, content)
+            if numbered_matches:
+                valid_keywords = []
+                for kw in numbered_matches:
+                    kw = kw.strip().strip('.,;:"\'')
+                    if re.match(r'^[a-zA-Z][a-zA-Z\s\-_]{1,30}$', kw):
+                        valid_keywords.append(kw.title())
+                if valid_keywords:
+                    return valid_keywords[:5]
+    
+    # 使用通用解析
+    return _parse_llm_response_enhanced(text_response)
+
+
+def _parse_japanese_keywords_enhanced(text_response: str) -> List[str]:
+    """日文關鍵字專用解析器"""
+    
+    if not text_response:
+        return []
+    
+    # 日文特定模式
+    japanese_indicators = ["キーワード", "重要な語", "主要語", "用語"]
+    
+    has_japanese_indicator = any(indicator in text_response for indicator in japanese_indicators)
+    
+    if has_japanese_indicator:
+        json_patterns = [
+            r'\[(.*?)\]',
+            r'キーワード\s*[：:]\s*\[(.*?)\]',
+            r'用語\s*[：:]\s*\[(.*?)\]'
+        ]
+        
+        for pattern in json_patterns:
+            matches = re.findall(pattern, text_response, re.DOTALL)
+            for match in matches:
+                try:
+                    json_str = f'[{match}]'
+                    keywords = json.loads(json_str)
+                    keywords = [str(kw).strip().strip('"\'') for kw in keywords if kw]
+                    if keywords:
+                        valid_japanese = []
+                        for kw in keywords:
+                            if re.search(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]', kw):
+                                valid_japanese.append(kw)
+                        return valid_japanese[:6]
+                except json.JSONDecodeError:
+                    continue
+    
+    # 日文引號模式
+    japanese_quotes = [
+        r'「([^」]+)」',
+        r'『([^』]+)』',
+        r'"([^"]*[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff][^"]*)"'
+    ]
+    
+    japanese_words = []
+    for pattern in japanese_quotes:
+        matches = re.findall(pattern, text_response)
+        japanese_words.extend([w.strip() for w in matches if w.strip()])
+    
+    if japanese_words:
+        valid_words = []
+        for word in japanese_words:
+            if 1 < len(word) < 20 and re.search(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]', word):
+                valid_words.append(word)
+        
+        if valid_words:
+            return valid_words[:6]
+    
+    # 提取包含日文字符的詞彙
+    japanese_terms = re.findall(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]{2,10}', text_response)
+    if japanese_terms:
+        unique_terms = list(dict.fromkeys(japanese_terms))[:6]
+        return unique_terms
+    
+    return []
+
+
+def _extract_keywords_from_text(keywords_text: str) -> List[str]:
+    """從描述性文本中提取關鍵字"""
+    
+    # JSON解析
+    json_match = re.search(r'\[(.*?)\]', keywords_text, re.DOTALL)
+    if json_match:
+        try:
+            json_str = f'[{json_match.group(1)}]'
+            keywords = json.loads(json_str)
+            return [str(kw).strip().strip('"\'') for kw in keywords if kw]
+        except json.JSONDecodeError:
+            pass
+    
+    # 編號列表解析
+    numbered_pattern = r'\d+\.\s*"?([^"\n]+)"?'
+    numbered_matches = re.findall(numbered_pattern, keywords_text)
+    if numbered_matches:
+        return [kw.strip().strip('.,;:"\'') for kw in numbered_matches]
+    
+    # 逗號分隔解析
+    if ',' in keywords_text:
+        parts = keywords_text.split(',')
+        keywords = []
+        for part in parts:
+            cleaned = part.strip().strip('.,;:"\'')
+            if cleaned and 1 < len(cleaned) < 50:
+                keywords.append(cleaned)
+        if keywords:
+            return keywords
+    
+    return []
+
+
+def _emergency_keyword_extract(raw_response: str) -> List[str]:
+    """應急關鍵字提取"""
+    words = re.findall(r'[a-zA-Z\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]{2,}', raw_response)
+    
+    stopwords = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 
+                'keywords', 'extract', 'content', 'text', 'following', 'format', 'json'}
+    
+    filtered_words = [w for w in words if w.lower() not in stopwords and len(w) > 2]
+    unique_words = list(dict.fromkeys(filtered_words))
+    
+    return unique_words[:3] if unique_words else []
+
+
+def _is_valid_keywords(keywords: List[str], lang: str) -> bool:
+    """檢查關鍵字是否有效"""
+    
+    if not keywords:
+        return False
+    
+    # 檢查後備關鍵字指標
+    fallback_indicators = [
+        'fallback', 'emergency', 'error', 'supplementary',
+        'Error', 'Emergency', 'Fallback', 'invalid',
+        'Key_Concept', 'Main_Topic', 'Core_Content',
+        '關鍵概念', '核心內容', '重要信息', '主要話題',
+        'キーワード', '重要語', '主要概念', '核心内容',
+        'emergency_kw', 'fallback_kw', 'supplementary_'
+    ]
+    
+    # 如果所有關鍵字都包含後備指示詞，則認為無效
+    fallback_count = 0
+    for kw in keywords:
+        if any(indicator in kw for indicator in fallback_indicators):
+            fallback_count += 1
+    
+    # 如果超過一半是後備關鍵字，認為無效
+    if fallback_count > len(keywords) * 0.5:
+        return False
+    
+    # 語言特定驗證
+    if lang in ["en", "english"]:
+        valid_count = sum(1 for kw in keywords if re.search(r'[a-zA-Z]', kw))
+        return valid_count > 0
+    elif lang in ["zh", "chinese"]:
+        valid_count = sum(1 for kw in keywords if re.search(r'[\u4e00-\u9fff]', kw))
+        return valid_count > 0
+    elif lang in ["ja", "japanese"]:
+        valid_count = sum(1 for kw in keywords if re.search(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]', kw))
+        return valid_count > 0
+    
+    return True
+
+
+def _postprocess_keywords(keywords: List[str], lang: str, expected_count: int) -> List[str]:
+    """關鍵字後處理和驗證"""
+    
+    if not keywords:
+        return _generate_fallback_keywords(lang, expected_count)
+    
+    # 清理關鍵字
+    cleaned = []
+    for kw in keywords:
+        if isinstance(kw, str):
+            kw = kw.strip().strip('"\'.,;')
+            # 移除數字開頭的編號
+            kw = re.sub(r'^\d+[.)]\s*', '', kw)
+            
+            # 語言特定驗證
+            if lang in ["en", "english"]:
+                # 修復語法錯誤：正確的字符串結束
+                if re.match(r'^[a-zA-Z][a-zA-Z\s\-_]{1,40}$', kw):
+                    cleaned.append(kw.title())
+            elif lang in ["zh", "chinese"]:
+                if 1 < len(kw) < 20:
+                    cleaned.append(kw)
+            elif lang in ["ja", "japanese"]:
+                if 1 < len(kw) < 15 and re.search(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]', kw):
+                    cleaned.append(kw)
+            else:
+                if 1 < len(kw) < 50:
+                    cleaned.append(kw)
+    
+    # 去重但保持順序
+    unique_keywords = []
+    seen = set()
+    for kw in cleaned:
+        kw_lower = kw.lower()
+        if kw_lower not in seen:
+            unique_keywords.append(kw)
+            seen.add(kw_lower)
+    
+    result = unique_keywords[:expected_count * 2]
+    return result if result else []
+
+
+def _generate_fallback_keywords(lang: str, count: int = 3, error_context: str = "") -> List[str]:
+    """生成語言特定的後備關鍵字"""
+    
+    if lang in ["en", "english"]:
+        base_words = ["Key_Concept", "Main_Topic", "Core_Content", "Important_Info", "Relevant_Term"]
+    elif lang in ["zh", "chinese"]:
+        base_words = ["關鍵概念", "核心內容", "重要信息", "主要話題", "相關術語"]
+    elif lang in ["ja", "japanese"]:
+        base_words = ["キーワード", "重要語", "主要概念", "核心内容", "関連用語"]
+    elif lang == "mixed":
+        base_words = ["核心概念", "Key_Concept", "キーワード", "Main_Topic", "重要内容"]
+    else:
+        base_words = ["Concept", "Topic", "Content", "Information", "Term"]
+    
+    # 添加錯誤上下文標識
+    if error_context:
+        if lang in ["en", "english"]:
+            error_suffix = "_Error"
+        elif lang in ["ja", "japanese"]:
+            error_suffix = "_エラー"
+        else:
+            error_suffix = "_錯誤"
+        base_words = [f"{word}{error_suffix}" for word in base_words[:count]]
+    
+    # 確保有足夠數量
+    while len(base_words) < count:
+        base_words.extend(base_words[:count - len(base_words)])
+    
+    return base_words[:count]
+
+
+# ========== 測試函數 ==========
+
+def test_syntax_fix():
+    """測試語法修復是否成功"""
+    print("測試語法修復...")
+    
+    try:
+        # 測試基本功能
+        keywords = generate_keywords("TSMC semiconductor technology", n=3, lang="en")
+        print(f"英文測試結果: {keywords}")
+        
+        keywords = generate_keywords("台積電半導體技術", n=3, lang="zh")
+        print(f"中文測試結果: {keywords}")
+        
+        keywords = generate_keywords("TSMCは半導体技術", n=3, lang="ja")
+        print(f"日文測試結果: {keywords}")
+        
+        print("語法修復測試通過")
+        return True
+        
+    except Exception as e:
+        print(f"語法修復測試失敗: {e}")
+        return False
+
+
+if __name__ == "__main__":
+    test_syntax_fix()

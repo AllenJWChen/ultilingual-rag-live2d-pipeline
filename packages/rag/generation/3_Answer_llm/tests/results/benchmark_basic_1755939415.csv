@@ -1,0 +1,2 @@
+mode,workers,seconds,questions,success,failed,throughput,gpu_util_avg,gpu_util_max,vram_max_mb,returncode
+basic,1,1.04,0,0,0,0.0,2.0,2,1374,1

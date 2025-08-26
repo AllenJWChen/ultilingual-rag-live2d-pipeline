@@ -1,0 +1,40 @@
+{
+  "total_chunks": 759,
+  "language_distribution": {
+    "chinese": 47,
+    "mixed": 5,
+    "english": 707
+  },
+  "keyword_language_distribution": {
+    "zh": 51,
+    "en": 708
+  },
+  "generation_strategy_distribution": {
+    "chinese_focused": 51,
+    "english_focused": 708
+  },
+  "quality_distribution": {
+    "high": 708,
+    "medium": 51,
+    "low": 0
+  },
+  "content_type_distribution": {
+    "general": 228,
+    "technical": 399,
+    "academic": 12,
+    "business": 120
+  },
+  "error_stats": {
+    "total_errors": 0,
+    "error_rate": 0.0
+  },
+  "keyword_stats": {
+    "total_keywords": 3036,
+    "avg_keywords_per_chunk": 4.0
+  },
+  "language_aware_stats": {
+    "chunks_with_language_info": 759,
+    "avg_chinese_ratio": 5.910507389971953,
+    "avg_english_ratio": 94.08949261002806
+  }
+}
